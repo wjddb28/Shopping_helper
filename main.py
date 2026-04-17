@@ -1,5 +1,6 @@
 # main.py
 from fastapi import FastAPI
+import requests
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -9,6 +10,9 @@ from datetime import datetime
 from database import init_db, insert_track, fetch_all_tracks, update_track_status, delete_track
 from crawlers.levdance import get_levdance_stock
 from crawlers.eballet import get_eballet_stock
+from crawlers.cafe24 import get_cafe24_stock
+from crawlers.makeshop import get_makeshop_stock
+from crawlers.sixshop import get_sixshop_stock
 
 app = FastAPI()
 init_db()
@@ -33,6 +37,7 @@ class TrackRequest(BaseModel):
     url: str
     target_color: str
     target_size: str
+    category: str = "미분류"
 
 # 1=알람켬, 0=알람끔
 class StatusRequest(BaseModel):
@@ -46,20 +51,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def detect_platform(url):
+    if "branduid=" in url or "shopdetail.html" in url:
+        return "makeshop"
+    elif "yooraballet.com" in url:
+        return "sixshop"
+        
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        html_text = response.text.lower()
+        
+        if "sixshop.com" in html_text or "sixshop.io" in html_text or "cdn.sixshop" in html_text:
+            return "sixshop"
+            
+        if "option_stock_data" in html_text or "cafe24.com" in html_text or "ec-core" in html_text:
+            return "cafe24"
+            
+    except Exception as e:
+        print(f"플랫폼 탐지 중 에러 발생: {e}")
+
+    return "cafe24"
+
 # 실시간 재고확인 API
 @app.get("/api/stock")
 def get_stock(url: str):
-    
-    # 다른 쇼핑몰 추가시 코드도 추가하기
-    if "levdance.com" in url:
-        return get_levdance_stock(url)
-
-    elif "eballetshop.com" in url:
+    if "eballetshop.com" in url:
         return get_eballet_stock(url)
-
     
+    elif "levdance.com" in url:
+        return get_levdance_stock(url)
+        
+    platform = detect_platform(url)    
+    if platform == "makeshop":
+        return get_makeshop_stock(url)
+    elif platform == "sixshop":
+        return get_sixshop_stock(url)
     else:
-        return {"status": "error", "message": "아직 지원하지 않는 쇼핑몰 주소입니다."}
+        return get_cafe24_stock(url)
     
 
 # 새로운 URL을 추가하는 API
@@ -73,7 +102,7 @@ def add_to_track_list(req: TrackRequest):
     mall_type = crawled_data["data"]["mall_type"]
     product_name =crawled_data["data"]["product_name"]
 
-    is_success = insert_track(req.url, mall_type, product_name, req.target_color, req.target_size)
+    is_success = insert_track(req.url, mall_type, product_name, req.target_color, req.target_size, req.category)
 
     if is_success:
         return {"status": "success", "message": f"[{mall_type}] {product_name} ({req.target_color}/{req.target_size}) 추적 시작!"}
@@ -94,14 +123,18 @@ def remove_track(item_id: int):
 
 # 저장한 목록을 불러오는 API
 @app.get("/api/tracks")
-def get_all_tracks(mall: Optional[str] = None):
+def get_all_tracks(mall: Optional[str] = None, category: Optional[str] = None):
     rows = fetch_all_tracks()
+    filtered_rows = rows
 
+    # 쇼핑몰 이름별로 필터링
     if mall:
-        filtered_rows = [row for row in rows if row['mall_type'] == mall]
-    else:
-        filtered_rows = rows
-
+        filtered_rows = [row for row in filtered_rows if row['mall_type'] == mall]
+        
+    # 카테고리별로 필터링
+    if category:
+        filtered_rows = [row for row in filtered_rows if row['category'] == category]
+        
     return {"status": "success", "data": filtered_rows}
 
 
@@ -163,8 +196,8 @@ def check_stock_periodically():
 def start_scheduler():
     scheduler = AsyncIOScheduler()
     
-    # 나중에 minutes=30 으로 바꾸기 (지금은 테스트로 10초)
-    scheduler.add_job(check_stock_periodically, 'interval', minutes=1)
+    # 나중에 minutes=30 으로 바꾸기
+    scheduler.add_job(check_stock_periodically, 'interval', minutes=10)
     
     scheduler.start()
     print("⏰ 자동 스케줄러 실행중..")

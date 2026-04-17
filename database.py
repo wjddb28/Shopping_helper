@@ -14,6 +14,7 @@ def init_db():
             product_name text,
             target_color text,
             target_size text,
+            category text dafault '미분류',
             is_active integer default 1
         )
     """)
@@ -22,14 +23,14 @@ def init_db():
 
 
 # DB에 새로운 상품을 저장
-def insert_track(url, mall_type, product_name, color, size):
+def insert_track(url, mall_type, product_name, color, size, category):
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         cursor.execute("""
-            insert into track_list (target_url, mall_type, product_name, target_color, target_size)
-            values(?, ?, ?, ?, ?)
-        """, (url, mall_type, product_name, color, size))
+            insert into track_list (target_url, mall_type, product_name, target_color, target_size, category)
+            values(?, ?, ?, ?, ?, ?)
+        """, (url, mall_type, product_name, color, size, category))
         conn.commit()
         return True
     except Exception as e:
